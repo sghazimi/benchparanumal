@@ -24,6 +24,8 @@ SOFTWARE.
 
 */
 
+#define COEF 128
+#define STRID 2
 
 @kernel void bp1AxAffineTri2D(const dlong Nelements,
                         @restrict const  dlong  *  elementList,
@@ -34,33 +36,51 @@ SOFTWARE.
                         @restrict const  dfloat *  q,
                               @restrict dfloat *  Aq){
 
-  for(int e=0;e<Nelements;e++;@outer(0)){
+  for(int eo=0;eo<Nelements;eo+=COEF*STRID;@outer(0)){
 
-    @shared dfloat  s_q[p_Np];
+    @shared dfloat  s_q[p_Np][COEF][STRID];
 
-    @exclusive dlong element;
+    @exclusive dlong element[STRID];
+
+    for(int ei=0;ei<COEF;++ei;@inner(1)){
 
     for(int n=0;n<p_Np;++n;@inner(0)){
 
-      element = elementList[e];
+    for(int ni=0;ni<STRID;ni++) {
 
-      const dlong id = GlobalToLocal[n + element*p_Np];
-      s_q[n] = (id!=-1) ? q[id] : 0.0;
+      int e=eo+ei*STRID+ni;
+      if(e<Nelements) {
+      element[ni] = elementList[e];
+
+      const dlong id = GlobalToLocal[n + element[ni]*p_Np];
+      s_q[n][ei][ni] = (id!=-1) ? q[id] : 0.0;
+      }
+    }
+    }
     }
 
+    for(int ei=0;ei<COEF;++ei;@inner(1)){
+
     for(int n=0;n<p_Np;++n;@inner(0)){
 
-      const dfloat J = wJ[element];
+    for(int ni=0;ni<STRID;ni++) {
+
+      int e=eo+ei*STRID+ni;
+      if(e<Nelements) {
+      const dfloat J = wJ[element[ni]];
 
       dfloat Mq = 0.0;
 
       for(int m=0;m<p_Np;++m){
         const dfloat Mm = MM[n + m*p_Np];
-        Mq += Mm * s_q[m];
+        Mq += Mm * s_q[m][ei][ni];
       }
 
-      const dlong base = n + element*p_Np;
+      const dlong base = n + element[ni]*p_Np;
       Aq[base] = J*Mq;
+      }
+    }
+    }
     }
   }
 }
