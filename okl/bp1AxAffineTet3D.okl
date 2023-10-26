@@ -24,6 +24,8 @@ SOFTWARE.
 
 */
 
+#define COEF 8
+#define STRID 8
 
 @kernel void bp1AxAffineTet3D(const dlong Nelements,
                         @restrict const  dlong  *  elementList,
@@ -34,33 +36,47 @@ SOFTWARE.
                         @restrict const  dfloat *  q,
                               @restrict dfloat *  Aq){
 
-  for(int e=0;e<Nelements;e++;@outer(0)){
+  for(int eo=0;eo<Nelements;eo+=COEF*STRID;@outer(0)){
 
-    @shared dfloat  s_q[p_Np];
+    @shared dfloat  s_q[p_Np][COEF][STRID];
 
-    @exclusive dlong element;
+    @shared dfloat  s_MM[p_Np][p_Np];
 
+    @exclusive dlong element[STRID];
+
+    for(int ei=0;ei<COEF;ei++;@inner(1)) {
     for(int n=0;n<p_Np;++n;@inner(0)){
 
-      element = elementList[e];
+    for(int m=ei;m<p_Np;m+=COEF) {
+      s_MM[m][n]= MM[n + m*p_Np];
+    }
+    for(int r=0;r<STRID;++r) {
+      int e=eo+ei*STRID+r;
 
-      const dlong id = GlobalToLocal[n + element*p_Np];
-      s_q[n] = (id!=-1) ? q[id] : 0.0;
+      element[r] = elementList[e];
+
+      const dlong id = GlobalToLocal[n + element[r]*p_Np];
+      s_q[n][ei][r] = (id!=-1) ? q[id] : 0.0;
+    }
+    }
     }
 
+    for(int ei=0;ei<COEF;ei++;@inner(1)) {
     for(int n=0;n<p_Np;++n;@inner(0)){
-
-      const dfloat J = wJ[element];
+    for(int r=0;r<STRID;++r) {
+      const dfloat J = wJ[element[r]];
 
       dfloat Mq = 0.0;
 
       for(int m=0;m<p_Np;++m){
-        const dfloat Mm = MM[n + m*p_Np];
-        Mq += Mm * s_q[m];
+        const dfloat Mm = s_MM[m][n]; //MM[n + m*p_Np];
+        Mq += Mm * s_q[m][ei][r];
       }
 
-      const dlong base = n + element*p_Np;
+      const dlong base = n + element[r]*p_Np;
       Aq[base] = J*Mq;
+    }
+    }
     }
   }
 }
