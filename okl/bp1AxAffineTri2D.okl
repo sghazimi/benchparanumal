@@ -24,8 +24,9 @@ SOFTWARE.
 
 */
 
-#define COEF 128
-#define STRID 2
+#define COEF 16
+#define STRID 1
+
 
 @kernel void bp1AxAffineTri2D(const dlong Nelements,
                         @restrict const  dlong  *  elementList,
@@ -39,6 +40,7 @@ SOFTWARE.
   for(int eo=0;eo<Nelements;eo+=COEF*STRID;@outer(0)){
 
     @shared dfloat  s_q[p_Np][COEF][STRID];
+    @shared dfloat  s_MM[p_Np][p_Np];
 
     @exclusive dlong element[STRID];
 
@@ -46,6 +48,9 @@ SOFTWARE.
 
     for(int n=0;n<p_Np;++n;@inner(0)){
 
+    for(int m=ei;m<p_Np;m+=COEF) {
+      s_MM[m][n] = MM[n+m*p_Np];
+    }
     for(int ni=0;ni<STRID;ni++) {
 
       int e=eo+ei*STRID+ni;
@@ -72,7 +77,7 @@ SOFTWARE.
       dfloat Mq = 0.0;
 
       for(int m=0;m<p_Np;++m){
-        const dfloat Mm = MM[n + m*p_Np];
+        const dfloat Mm = s_MM[m][n]; //MM[n + m*p_Np];
         Mq += Mm * s_q[m][ei][ni];
       }
 
@@ -84,3 +89,4 @@ SOFTWARE.
     }
   }
 }
+
