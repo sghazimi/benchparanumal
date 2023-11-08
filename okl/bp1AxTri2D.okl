@@ -24,8 +24,8 @@ SOFTWARE.
 
 */
 
-#define COEF 1
-#define STRID 2 
+#define COEF 12
+#define STRID 4
 
 @kernel void bp1AxTri2D(const dlong Nelements,
                         @restrict const  dlong  *  elementList,
@@ -38,13 +38,22 @@ SOFTWARE.
 
   for(int eo=0;eo<Nelements;eo+=COEF*STRID;@outer(0)){
 
-    @shared dfloat  s_q[p_cubNp][COEF][STRID];
+    @shared dfloat  s_q[STRID][COEF][p_cubNp];
+
+    @shared dfloat s_I[p_cubNp][p_cubNp];
+    @shared dfloat s_IT[p_cubNp][p_cubNp];
 
     @exclusive dlong element[STRID];
 
     for(int ei=0;ei<COEF;ei++;@inner(1)){
     for(int n=0;n<p_cubNp;++n;@inner(0)){
+
+    for(int m=0;m<p_cubNp;++m){
+      s_I[n][m]=I[n + m*p_cubNp];
+    }
+
     for(int r=0;r<STRID;r++) {
+
       int e=eo+ei*STRID+r;
 
       if(e<Nelements) {
@@ -52,7 +61,7 @@ SOFTWARE.
 
       if (n<p_Np) {
         const dlong id = GlobalToLocal[n + element[r]*p_Np];
-        s_q[n][ei][r] = (id!=-1) ? q[id] : 0.0;
+        s_q[r][ei][n] = (id!=-1) ? q[id] : 0.0;
       }
     }
     }
@@ -69,8 +78,8 @@ SOFTWARE.
       Iq[r] = 0.0;
 
       for(int m=0;m<p_Np;++m){
-        const dfloat Im = I[n + m*p_cubNp];
-        Iq[r] += Im * s_q[m][ei][r];
+        const dfloat Im =  s_I[n][m];
+        Iq[r] += Im * s_q[r][ei][m];
       }
     }
     }
@@ -85,7 +94,7 @@ SOFTWARE.
       const dlong gbase = element[r]*p_cubNp + n;
       const dfloat GWJ = cubwJ[gbase];
 
-      s_q[n][ei][r] = GWJ*Iq[r];
+      s_q[r][ei][n] = GWJ*Iq[r];
     }
     }
     }
@@ -101,8 +110,8 @@ SOFTWARE.
         dfloat Mq = 0.0;
 
         for(int m=0;m<p_cubNp;++m){
-          const dfloat ITm = I[m + n*p_cubNp];
-          Mq += ITm * s_q[m][ei][r];
+          const dfloat ITm = s_I[m][n]; //I[m + n*p_cubNp];
+          Mq += ITm * s_q[r][ei][m];
         }
 
         const dlong base = n + element[r]*p_Np;
