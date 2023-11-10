@@ -28,7 +28,7 @@ SOFTWARE.
 // Need dfloat == double
 static_assert (sizeof(dfloat) == sizeof(double), "Dfloat must be double");
 
-#if KERNEL_NUMBER==1
+#if KERNEL_NUMBER==0
 
 extern "C"
 __global__
@@ -54,48 +54,52 @@ void bp1AxAffineTri2D(const dlong Nelements,
   //To pack the M*q operation into a matrix-matrix multiply, we must pack multiple q
   // elements into this wavefront. Since the instruction inputs are 16x4, we will process
   // 16 elements on this wave
-
   const dlong eo = 16*blockIdx.x;
 
   //We launch a (16,4) size threadblock
-  const dlong ei = threadIdx.x; //different lanes read different elements
-  dlong n = threadIdx.y; //second dimension is DOFs
+  const dlong ei = threadIdx.x;
+  dlong n = threadIdx.y; 
 
   const dlong e = eo+ei;
   const dlong element = (e<Nelements) ? elementList[e] : -1;
 
   double4 Mq = {0}; // zero out 16x16 result
+  
+  int iters=(p_Np/4)+1;
+  int count=0;
 
+  while(count<iters) {
 
-  for(;n<((p_Np+3)/4)*4;n+=4){ //multiply 4 DOFs over each element in each MFMA
+  int nt=n+count*4;
 
-    const dlong id = (element>=0 && n<p_Np) ? GlobalToLocal[n + element*p_Np] : -1;
-    const dfloat r_q = (id!=-1) ? q[id] : 0.0; //4 DOFs from 16 elements
+  const dlong id = (nt<p_Np && element!=-1) ? GlobalToLocal[nt + element*p_Np] : -1;
 
-    const dfloat r_MM = (threadIdx.x<p_Np && n<p_Np) ? MM[threadIdx.x + n * p_Np] : 0.0; //4 columns of MM
+  const dfloat r_q = (id!=-1) ? q[id] : 0;
 
-    // Mq += r_MM^T * r_q
-    Mq = __builtin_amdgcn_mfma_f64_16x16x4f64(r_MM, r_q, Mq, 0, 0, 0);
+  const dfloat r_MM = (nt<p_Np && ei<p_Np) ? MM[ei + nt*p_Np] : 0;
+
+  Mq = __builtin_amdgcn_mfma_f64_16x16x4f64(r_MM, r_q, Mq, 0, 0, 0);
+
+  count+=1;
   }
 
-  // Mq is in the same format that we read q in as, namely
-  //  consecutive lanes cover 16 elements of Mq, and groups of 16 threads cover DOFs
-  //  Entries in the double4 skip 4 DOFs
+  if(element!=-1) { 
+  const dfloat J = wJ[element];
 
-  if (element>=0) {
-    const dfloat J = wJ[element];
-
-    for(int i = 0; i < 4; ++i){
-      n = threadIdx.y + 4 * i;
-      if (n < p_Np) {
-        Aq[n + element*p_Np] = J*Mq[i];
-      }
-    }
+  count=0;
+  while(count<iters) {
+  int nt=n+count*4;
+  const dlong base = (nt< p_Np) ? nt + element*p_Np : -1;
+  if(base != -1) {
+     Aq[base] = J*Mq[count];
+  }
+  count+=1;
+  }
   }
 }
 #endif
 
-#if KERNEL_NUMBER==0
+#if KERNEL_NUMBER==1
 
 extern "C"
 __global__
