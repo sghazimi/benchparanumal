@@ -51,6 +51,9 @@ void bp1AxAffineTri2D(const dlong Nelements,
   //This kernel uses only one wavefront, and the number of DOFs must be <=16
   static_assert (p_Np <= 16, "Kernel only supports small element right now");
 
+  dfloat  s_MM[p_Np][p_Np];
+  dfloat  s_Aq[p_Np*4];
+
   //To pack the M*q operation into a matrix-matrix multiply, we must pack multiple q
   // elements into this wavefront. Since the instruction inputs are 16x4, we will process
   // 16 elements on this wave
@@ -72,11 +75,14 @@ void bp1AxAffineTri2D(const dlong Nelements,
 
   int nt=n+count*4;
 
+  s_MM[nt][ei] = MM[ei + nt*p_Np];
+
   const dlong id = (nt<p_Np && element!=-1) ? GlobalToLocal[nt + element*p_Np] : -1;
 
   const dfloat r_q = (id!=-1) ? q[id] : 0;
 
-  const dfloat r_MM = (nt<p_Np && ei<p_Np) ? MM[ei + nt*p_Np] : 0;
+  //const dfloat r_MM = (nt<p_Np && ei<p_Np) ? MM[ei + nt*p_Np] : 0;
+  const dfloat r_MM = (nt<p_Np && ei<p_Np) ? s_MM[nt][ei] : 0;
 
   Mq = __builtin_amdgcn_mfma_f64_16x16x4f64(r_MM, r_q, Mq, 0, 0, 0);
 
@@ -91,7 +97,8 @@ void bp1AxAffineTri2D(const dlong Nelements,
   int nt=n+count*4;
   const dlong base = (nt< p_Np) ? nt + element*p_Np : -1;
   if(base != -1) {
-     Aq[base] = J*Mq[count];
+     s_Aq[base] = J*Mq[count];
+     Aq[base]=s_Aq[base];
   }
   count+=1;
   }
