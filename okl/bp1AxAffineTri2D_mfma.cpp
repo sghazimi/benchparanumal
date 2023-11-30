@@ -135,28 +135,20 @@ void bp1AxAffineTri2D(const dlong Nelements,
   const dlong element = (e<Nelements) ? elementList[e] : -1;
 
   dfloat Mq = {0}; // zero out result
+ 
+  const dlong id = (n<p_Np && element!=-1) ? GlobalToLocal[n + element*p_Np] : -1;
+  const dfloat r_q = (id!=-1) ? q[id] : 0;
+  const dfloat r_MM = (n<p_Np && (ei%4)<p_Np) ? MM[(ei%4) + n*p_Np] : 0;
 
-  for(;n<((p_Np+3)/4)*4;n+=4){ //multiply 4 DOFs over each element in each MFMA
+  Mq = __builtin_amdgcn_mfma_f64_4x4x4f64(r_MM, r_q, Mq, 0, 0, 0);
 
-    const dlong id = (element>=0 && n<p_Np) ? GlobalToLocal[n + element*p_Np] : -1;
-    const dfloat r_q = (id!=-1) ? q[id] : 0.0; //4 DOFs from 16 elements
+  if(element!=-1) {
+  const dfloat J = wJ[element];
 
-    const dfloat r_MM = ((threadIdx.x%4)<p_Np && n<p_Np) ? MM[(threadIdx.x%4) + n * p_Np] : 0.0; //4 columns of MM
-
-    // Mq += r_MM^T * r_q
-    Mq = __builtin_amdgcn_mfma_f64_4x4x4f64(r_MM, r_q, Mq, 0, 0, 0);
+  const dlong base = (n< p_Np) ? n + element*p_Np : -1;
+  if(base != -1) {
+     Aq[base] = J*Mq;
   }
-
-  // Mq is in the same format that we read q in as, namely
-  //  consecutive lanes cover 16 elements of Mq, and groups of 16 threads cover DOFs
-
-  if (element>=0) {
-    const dfloat J = wJ[element];
-
-    n = threadIdx.y;
-    if (n < p_Np) {
-      Aq[n + element*p_Np] = J*Mq;
-    }
   }
 }
 #endif
