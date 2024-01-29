@@ -1,0 +1,277 @@
+/*
+
+The MIT License (MIT)
+
+Copyright (c) 2017-2022 Tim Warburton, Noel Chalmers, Jesse Chan, Ali Karakus
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+*/
+
+
+#if KERNEL_NUMBER==0
+/*original kernel*/
+@kernel void bp1AxAffineTet3D(const dlong Nelements,
+                        @restrict const  dlong  *  elementList,
+                        @restrict const  dlong  *  GlobalToLocal,
+                        @restrict const  dfloat *  wJ,
+                        @restrict const  dfloat *  I,
+                        @restrict const  dfloat *  MM,
+                        @restrict const  dfloat *  q,
+                              @restrict dfloat *  Aq){
+
+  for(dlong e=0;e<Nelements;e++;@outer(0)){
+
+    @shared dfloat  s_q[p_Np];
+
+    @exclusive dlong element;
+
+    for(int n=0;n<p_Np;++n;@inner(0)){
+
+      element = elementList[e];
+      const dfloat J = wJ[element];
+
+      const dlong id = GlobalToLocal[n + element*p_Np];
+      s_q[n] = (id!=-1) ? J*q[id] : 0.0;
+    }
+
+    for(int n=0;n<p_Np;++n;@inner(0)){
+
+      dfloat Mq = 0.0;
+
+      for(int m=0;m<p_Np;++m){
+        const dfloat Mm = MM[n + m*p_Np];
+        Mq += Mm * s_q[m];
+      }
+
+      const dlong base = n + element*p_Np;
+      Aq[base] = Mq;
+    }
+  }
+}
+#endif
+
+#if KERNEL_NUMBER==1
+/*SIMD packing with shared memory*/
+@kernel void bp1AxAffineTet3D(const dlong Nelements,
+                        @restrict const  dlong  *  elementList,
+                        @restrict const  dlong  *  GlobalToLocal,
+                        @restrict const  dfloat *  wJ,
+                        @restrict const  dfloat *  I,
+                        @restrict const  dfloat *  MM,
+                        @restrict const  dfloat *  q,
+                              @restrict dfloat *  Aq){
+
+  for(dlong eo=0;eo<Nelements;eo+=p_NelementsPerBlk*p_NelementsPerThd;@outer(0)){
+
+    @shared dfloat  s_MM[p_Np][p_Np];
+
+    @shared dfloat  s_q[p_NelementsPerThd][p_NelementsPerBlk][p_Np];
+
+    @exclusive dlong element[p_NelementsPerThd];
+
+    for(int ei=0;ei<p_NelementsPerBlk;ei++;@inner(1)) {
+      for(int n=0;n<p_Np;++n;@inner(0)){
+
+        for(int m=ei;m<p_Np;m+=p_NelementsPerBlk) {
+          s_MM[m][n]= MM[n + m*p_Np];
+        }
+
+        for(int r=0;r<p_NelementsPerThd;++r) {
+          const dlong e = eo+ei*p_NelementsPerThd+r;
+
+          if(e<Nelements) {
+            element[r] = elementList[e];
+            const dfloat J = wJ[element[r]];
+
+            const dlong id = GlobalToLocal[n + element[r]*p_Np];
+            s_q[r][ei][n] = (id!=-1) ? J*q[id] : 0.0;
+          } else {
+            element[r] = -1;
+          }
+        }
+      }
+    }
+
+    for(int ei=0;ei<p_NelementsPerBlk;ei++;@inner(1)) {
+      for(int n=0;n<p_Np;++n;@inner(0)){
+
+        dfloat Mq[p_NelementsPerThd] = {0.0};
+
+        for(int m=0;m<p_Np;++m) {
+          const dfloat Mm = s_MM[m][n]; //MM[n + m*p_Np];
+
+          for(int r=0;r<p_NelementsPerThd;++r) {
+            Mq[r] += Mm * s_q[r][ei][m];
+          }
+        }
+
+        for(int r=0;r<p_NelementsPerThd;++r) {
+          if(element[r]>=0) {
+            const dlong base = n + element[r]*p_Np;
+            Aq[base] = Mq[r];
+          }
+        }
+      }
+    }
+  }
+}
+#endif
+
+#if KERNEL_NUMBER==2
+/*SIMD packing without shared memory*/
+@kernel void bp1AxAffineTet3D(const dlong Nelements,
+                        @restrict const  dlong  *  elementList,
+                        @restrict const  dlong  *  GlobalToLocal,
+                        @restrict const  dfloat *  wJ,
+                        @restrict const  dfloat *  I,
+                        @restrict const  dfloat *  MM,
+                        @restrict const  dfloat *  q,
+                              @restrict dfloat *  Aq){
+
+  for(dlong eo=0;eo<Nelements;eo+=p_NelementsPerBlk*p_NelementsPerThd;@outer(0)){
+
+    @shared dfloat  s_q[p_NelementsPerThd][p_NelementsPerBlk][p_Np];
+
+    @exclusive dlong element[p_NelementsPerThd];
+
+    for(int ei=0;ei<p_NelementsPerBlk;ei++;@inner(1)) {
+      for(int n=0;n<p_Np;++n;@inner(0)){
+
+        for(int r=0;r<p_NelementsPerThd;++r) {
+          const dlong e = eo+ei*p_NelementsPerThd+r;
+
+          if(e<Nelements) {
+            element[r] = elementList[e];
+            const dfloat J = wJ[element[r]];
+
+            const dlong id = GlobalToLocal[n + element[r]*p_Np];
+            s_q[r][ei][n] = (id!=-1) ? J*q[id] : 0.0;
+          } else {
+            element[r] = -1;
+          }
+        }
+      }
+    }
+
+    for(int ei=0;ei<p_NelementsPerBlk;ei++;@inner(1)) {
+      for(int n=0;n<p_Np;++n;@inner(0)){
+
+        dfloat Mq[p_NelementsPerThd] = {0.0};
+
+        for(int m=0;m<p_Np;++m){
+          const dfloat Mm = MM[n + m*p_Np];
+
+          for(int r=0;r<p_NelementsPerThd;++r) {
+            Mq[r] += Mm * s_q[r][ei][m];
+          }
+        }
+
+        for(int r=0;r<p_NelementsPerThd;++r) {
+          if (element[r]>=0) {
+            const dlong base = n + element[r]*p_Np;
+            Aq[base] = Mq[r];
+          }
+        }
+      }
+    }
+  }
+}
+#endif
+
+#if KERNEL_NUMBER==3
+/*MFMA for any p_Np*/
+@kernel void bp1AxAffineTet3D(const dlong Nelements,
+                        @restrict const  dlong  *  elementList,
+                        @restrict const  dlong  *  GlobalToLocal,
+                        @restrict const  dfloat *  wJ,
+                        @restrict const  dfloat *  I,
+                        @restrict const  dfloat *  MM,
+                        @restrict const  dfloat *  q,
+                              @restrict dfloat *  Aq){
+
+  for(dlong eo=0;eo<Nelements;eo+=32;@outer(0)){
+
+    @shared dfloat  s_q[(((p_Np-1)/16)+1)*16][16+1][2];
+
+    @exclusive dlong element[4][2];
+
+    for(int w=0;w<((p_Np-1)/16)+1;++w;@inner(2)){
+      for(int ly=0;ly<4;++ly;@inner(1)){
+        for(int lx=0;lx<16;++lx;@inner(0)){
+
+          for(int s=0;s<2;++s){
+          const int n = lx + 16*w;
+
+          for (int i=0;i<4;++i) {
+            const dlong e = eo + ly + 4*i+16*s;
+            element[i][s] = (e<Nelements) ? elementList[e] : -1;
+            const dfloat J = (e<Nelements) ? wJ[element[i][s]] : 0.;
+
+            const dlong id = (e<Nelements && n<p_Np) ? GlobalToLocal[n + element[i][s]*p_Np] : -1;
+            s_q[n][ly+4*i][s] = (id!=-1) ? J*q[id] : 0.0;
+          }
+        }
+       }
+      }
+    }
+
+    for(int w=0;w<((p_Np-1)/16)+1;++w;@inner(2)){
+      for(int ly=0;ly<4;++ly;@inner(1)){
+        for(int lx=0;lx<16;++lx;@inner(0)){
+
+         __attribute__((__vector_size__(4 * 8))) double Mq[2];
+
+          Mq[0] = {0.}; // zero out 16x16 result
+          Mq[1] = {0.}; // zero out 16x16 result
+
+          const int n = lx + 16*w;
+
+        dfloat r_MM = (n<p_Np && (ly)<p_Np) ? MM[n + (ly)*p_Np] : 0.0; //16 rows and 4 columns of MM
+
+          for(int m=0;m<p_Np;m+=4){ //multiply 4 DOFs over each element in each MFMA
+
+            const dfloat r_q_1  = s_q[m+ly][lx][0]; //4 DOFs from 16 elements
+            const dfloat r_q_2  = s_q[m+ly][lx][1]; //4 DOFs from 16 elements
+	    const dfloat r_MM_next = (n<p_Np && (m+4+ly)<p_Np) ? MM[n + (m+4+ly)*p_Np] : 0.0; //16 rows and 4 columns of MM
+
+            // Mq += r_q^T * r_MM
+            Mq[0] = __builtin_amdgcn_mfma_f64_16x16x4f64(r_q_1, r_MM, Mq[0], 0, 0, 0);
+            Mq[1] = __builtin_amdgcn_mfma_f64_16x16x4f64(r_q_2, r_MM, Mq[1], 0, 0, 0);
+
+            r_MM = r_MM_next;
+          }
+
+          //Mq is 16x16. Columns (i.e. lx) increment dofs, and rows (ly + 4*i) increment elements
+          if (n < p_Np) {
+            for (int i=0;i<4;++i) {
+              for (int s=0;s<2;++s) {
+              if (element[i][s]>-1) {
+                Aq[n + element[i][s]*p_Np] = Mq[s][i];
+              }
+	     }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+#endif
+
